@@ -56,6 +56,10 @@ const ImageUploader = forwardRef<HTMLImageElement, ImageUploaderProps>(({ id, la
   const [orbPosition, setOrbPosition] = useState<{x: number, y: number} | null>(null);
   const [fileTypeError, setFileTypeError] = useState<string | null>(null);
   const [showGrid, setShowGrid] = useState(false);
+  const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [isPanning, setIsPanning] = useState(false);
+  const [startPanPos, setStartPanPos] = useState({ x: 0, y: 0 });
 
   // Expose the internal imgRef to the parent component via the forwarded ref
   useImperativeHandle(ref, () => imgRef.current as HTMLImageElement);
@@ -63,8 +67,46 @@ const ImageUploader = forwardRef<HTMLImageElement, ImageUploaderProps>(({ id, la
   useEffect(() => {
     if (!imageUrl) {
       setFileTypeError(null);
+      setZoom(1);
+      setPan({ x: 0, y: 0 });
     }
   }, [imageUrl]);
+
+  const handleWheel = (e: React.WheelEvent) => {
+    if (!imageUrl || !isDropZone) return;
+    if (e.ctrlKey || e.metaKey) {
+      e.preventDefault();
+      const delta = -e.deltaY;
+      const factor = 0.01;
+      setZoom(prev => Math.min(Math.max(prev + delta * factor, 0.5), 5));
+    }
+  };
+
+  const handleMouseDown = (e: React.MouseEvent) => {
+    if (e.button === 1 || (e.button === 0 && e.altKey)) {
+      e.preventDefault();
+      setIsPanning(true);
+      setStartPanPos({ x: e.clientX - pan.x, y: e.clientY - pan.y });
+    }
+  };
+
+  const handleMouseMove = (e: React.MouseEvent) => {
+    if (isPanning) {
+      setPan({
+        x: e.clientX - startPanPos.x,
+        y: e.clientY - startPanPos.y
+      });
+    }
+  };
+
+  const handleMouseUp = () => {
+    setIsPanning(false);
+  };
+
+  const resetZoomPan = () => {
+    setZoom(1);
+    setPan({ x: 0, y: 0 });
+  };
 
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -104,8 +146,9 @@ const ImageUploader = forwardRef<HTMLImageElement, ImageUploaderProps>(({ id, la
     const offsetX = (containerWidth - renderedWidth) / 2;
     const offsetY = (containerHeight - renderedHeight) / 2;
 
-    const pointX = clientX - containerRect.left;
-    const pointY = clientY - containerRect.top;
+    // Adjust for zoom and pan
+    const pointX = (clientX - containerRect.left - pan.x - containerWidth / 2) / zoom + containerWidth / 2;
+    const pointY = (clientY - containerRect.top - pan.y - containerHeight / 2) / zoom + containerHeight / 2;
 
     const imageX = pointX - offsetX;
     const imageY = pointY - offsetY;
@@ -120,7 +163,7 @@ const ImageUploader = forwardRef<HTMLImageElement, ImageUploaderProps>(({ id, la
     const yPercent = (imageY / renderedHeight) * 100;
 
     onProductDrop({ x: pointX, y: pointY }, { xPercent, yPercent });
-  }, [onProductDrop]);
+  }, [onProductDrop, zoom, pan]);
 
   const handleClick = (event: React.MouseEvent<HTMLDivElement>) => {
     if (isDropZone && onProductDrop) {
@@ -137,12 +180,16 @@ const ImageUploader = forwardRef<HTMLImageElement, ImageUploaderProps>(({ id, la
       setIsDraggingOver(true);
       if (isDropZone && onProductDrop) {
           const rect = event.currentTarget.getBoundingClientRect();
-          setOrbPosition({
-              x: event.clientX - rect.left,
-              y: event.clientY - rect.top
-          });
+          const containerWidth = rect.width;
+          const containerHeight = rect.height;
+          
+          // Adjust for zoom and pan
+          const x = (event.clientX - rect.left - pan.x - containerWidth / 2) / zoom + containerWidth / 2;
+          const y = (event.clientY - rect.top - pan.y - containerHeight / 2) / zoom + containerHeight / 2;
+          
+          setOrbPosition({ x, y });
       }
-  }, [isDropZone, onProductDrop]);
+  }, [isDropZone, onProductDrop, zoom, pan]);
 
   const handleDragLeave = useCallback((event: React.DragEvent<HTMLDivElement>) => {
       event.preventDefault();
@@ -199,6 +246,10 @@ const ImageUploader = forwardRef<HTMLImageElement, ImageUploaderProps>(({ id, la
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
+        onWheel={handleWheel}
+        onMouseDown={handleMouseDown}
+        onMouseMove={handleMouseMove}
+        onMouseUp={handleMouseUp}
         data-dropzone-id={id}
       >
         <input
@@ -223,12 +274,16 @@ const ImageUploader = forwardRef<HTMLImageElement, ImageUploaderProps>(({ id, la
               exit={{ opacity: 0 }}
               transition={{ duration: 0.3 }}
               className="w-full h-full relative"
+              style={{
+                transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+                cursor: isPanning ? 'grabbing' : isDropZone ? 'crosshair' : 'pointer'
+              }}
             >
               <img 
                 ref={imgRef}
                 src={imageUrl} 
                 alt={label || 'Uploaded Scene'} 
-                className="w-full h-full object-contain" 
+                className="w-full h-full object-contain pointer-events-none" 
               />
               {showGrid && (
                   <div 
@@ -240,44 +295,12 @@ const ImageUploader = forwardRef<HTMLImageElement, ImageUploaderProps>(({ id, la
                       }}
                   ></div>
               )}
-              {isDropZone && (
-                  <motion.button
-                      initial={{ opacity: 0, scale: 0.8 }}
-                      animate={{ opacity: 1, scale: 1 }}
-                      whileHover={{ scale: 1.05 }}
-                      whileTap={{ scale: 0.95 }}
-                      onClick={(e) => {
-                          e.stopPropagation();
-                          setShowGrid(!showGrid);
-                      }}
-                      className={`absolute top-2 right-2 flex items-center text-xs font-semibold px-3 py-1.5 rounded-md transition-all z-20 shadow-lg ${showGrid ? 'bg-blue-600 text-white hover:bg-blue-700' : 'bg-black bg-opacity-60 text-white hover:bg-opacity-80'}`}
-                      aria-label={showGrid ? "Hide grid" : "Show grid"}
-                  >
-                      <GridIcon />
-                      {showGrid ? "Hide Grid" : "Show Grid"}
-                  </motion.button>
-              )}
-              {onRemove && (
-                  <motion.button
-                      initial={{ opacity: 0, scale: 0.8 }}
-                      animate={{ opacity: 1, scale: 1 }}
-                      whileHover={{ scale: 1.1, backgroundColor: '#ef4444' }}
-                      whileTap={{ scale: 0.9 }}
-                      onClick={(e) => {
-                          e.stopPropagation();
-                          onRemove();
-                      }}
-                      className="absolute top-2 left-2 p-2 bg-black/40 backdrop-blur-md text-white rounded-full transition-colors z-20 shadow-lg border border-white/10"
-                      aria-label="Remove image"
-                  >
-                      <XIcon />
-                  </motion.button>
-              )}
               <div 
                   className="drop-orb" 
                   style={{ 
                       left: currentOrbPosition ? currentOrbPosition.x : -9999, 
-                      top: currentOrbPosition ? currentOrbPosition.y : -9999 
+                      top: currentOrbPosition ? currentOrbPosition.y : -9999,
+                      transform: `translate(-50%, -50%) scale(${1/zoom})`
                   }}
               ></div>
               {persistedOrbPosition && (
@@ -287,26 +310,10 @@ const ImageUploader = forwardRef<HTMLImageElement, ImageUploaderProps>(({ id, la
                           left: persistedOrbPosition.x, 
                           top: persistedOrbPosition.y,
                           opacity: 1,
-                          transform: 'translate(-50%, -50%) scale(1)',
+                          transform: `translate(-50%, -50%) scale(${1/zoom})`,
                           transition: 'none', // Appear instantly without animation
                       }}
                   ></div>
-              )}
-              {showDebugButton && onDebugClick && (
-                  <motion.button
-                      initial={{ opacity: 0, scale: 0.8 }}
-                      animate={{ opacity: 1, scale: 1 }}
-                      whileHover={{ scale: 1.05 }}
-                      whileTap={{ scale: 0.95 }}
-                      onClick={(e) => {
-                          e.stopPropagation();
-                          onDebugClick();
-                      }}
-                      className="absolute bottom-2 right-2 bg-black bg-opacity-60 text-white text-xs font-semibold px-3 py-1.5 rounded-md hover:bg-opacity-80 transition-all z-20 shadow-lg"
-                      aria-label="Show debug view"
-                  >
-                      Debug
-                  </motion.button>
               )}
             </motion.div>
           ) : (
@@ -339,6 +346,98 @@ const ImageUploader = forwardRef<HTMLImageElement, ImageUploaderProps>(({ id, la
             </motion.div>
           )}
         </AnimatePresence>
+
+        {imageUrl && isDropZone && (
+          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-2 bg-black/60 backdrop-blur-md px-4 py-2 rounded-full z-30 border border-white/10">
+            <button 
+              onClick={(e) => { e.stopPropagation(); setZoom(prev => Math.max(prev - 0.2, 0.5)); }}
+              className="p-1 hover:text-blue-400 transition-colors text-white"
+              title="Zoom Out"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 12H4" />
+              </svg>
+            </button>
+            <span className="text-[10px] font-bold text-white min-w-[40px] text-center">
+              {Math.round(zoom * 100)}%
+            </span>
+            <button 
+              onClick={(e) => { e.stopPropagation(); setZoom(prev => Math.min(prev + 0.2, 5)); }}
+              className="p-1 hover:text-blue-400 transition-colors text-white"
+              title="Zoom In"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+              </svg>
+            </button>
+            <div className="w-px h-4 bg-white/20 mx-1"></div>
+            <button 
+              onClick={(e) => { e.stopPropagation(); resetZoomPan(); }}
+              className="p-1 hover:text-blue-400 transition-colors text-white"
+              title="Reset View"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              </svg>
+            </button>
+            <div className="w-px h-4 bg-white/20 mx-1"></div>
+            <div className="flex items-center gap-1 text-[9px] text-zinc-400 font-medium">
+              <kbd className="bg-white/10 px-1 rounded">Alt+Drag</kbd> to Pan
+            </div>
+          </div>
+        )}
+
+        {imageUrl && isDropZone && showDebugButton && onDebugClick && (
+            <motion.button
+                initial={{ opacity: 0, scale: 0.8 }}
+                animate={{ opacity: 1, scale: 1 }}
+                whileHover={{ scale: 1.05 }}
+                whileTap={{ scale: 0.95 }}
+                onClick={(e) => {
+                    e.stopPropagation();
+                    onDebugClick();
+                }}
+                className="absolute bottom-4 right-4 bg-black/60 backdrop-blur-md text-white text-xs font-semibold px-4 py-2 rounded-full hover:bg-black/80 transition-all z-30 shadow-lg border border-white/10"
+                aria-label="Show debug view"
+            >
+                Debug
+            </motion.button>
+        )}
+
+        {onRemove && (
+            <motion.button
+                initial={{ opacity: 0, scale: 0.8 }}
+                animate={{ opacity: 1, scale: 1 }}
+                whileHover={{ scale: 1.1, backgroundColor: '#ef4444' }}
+                whileTap={{ scale: 0.9 }}
+                onClick={(e) => {
+                    e.stopPropagation();
+                    onRemove();
+                }}
+                className="absolute top-4 left-4 p-2 bg-black/40 backdrop-blur-md text-white rounded-full transition-colors z-30 shadow-lg border border-white/10"
+                aria-label="Remove image"
+            >
+                <XIcon />
+            </motion.button>
+        )}
+
+        {imageUrl && isDropZone && (
+            <motion.button
+                initial={{ opacity: 0, scale: 0.8 }}
+                animate={{ opacity: 1, scale: 1 }}
+                whileHover={{ scale: 1.05 }}
+                whileTap={{ scale: 0.95 }}
+                onClick={(e) => {
+                    e.stopPropagation();
+                    setShowGrid(!showGrid);
+                }}
+                className={`absolute top-4 right-4 flex items-center text-xs font-semibold px-4 py-2 rounded-full transition-all z-30 shadow-lg border border-white/10 ${showGrid ? 'bg-blue-600 text-white hover:bg-blue-700' : 'bg-black/40 backdrop-blur-md text-white hover:bg-black/60'}`}
+                aria-label={showGrid ? "Hide grid" : "Show grid"}
+            >
+                <GridIcon />
+                {showGrid ? "Hide Grid" : "Show Grid"}
+            </motion.button>
+        )}
       </motion.div>
       <AnimatePresence>
         {fileTypeError && (
