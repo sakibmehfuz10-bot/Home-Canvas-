@@ -318,7 +318,7 @@ Provide only the two descriptions concatenated in a few sentences.
   let semanticLocationDescription = '';
   try {
     const descriptionResponse = await ai.models.generateContent({
-      model: 'gemini-2.0-flash',
+      model: 'gemini-2.5-flash-lite',
       contents: { parts: [{ text: descriptionPrompt }, markedEnvironmentImagePart] }
     });
     semanticLocationDescription = descriptionResponse.text;
